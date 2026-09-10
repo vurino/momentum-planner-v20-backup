@@ -35,6 +35,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Root-level health check (not under /api prefix)
+@app.get("/health")
+async def root_health_check():
+    """Health check endpoint at root level for deployment verification"""
+    return {"status": "healthy", "service": "momentum-planner-api"}
+
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
@@ -190,11 +196,16 @@ async def _backfill_daily_task_names(mongo_db):
             )
             fixed += 1
         else:
-            await mongo_db.daily_tasks.delete_one({"id": t["id"]})
-            dropped += 1
+            # Mark orphaned tasks instead of deleting - preserves data integrity
+            if not t.get("orphaned"):
+                await mongo_db.daily_tasks.update_one(
+                    {"id": t["id"]},
+                    {"$set": {"orphaned": True, "name": t.get("name", "Deleted Task")}},
+                )
+                dropped += 1
 
     logging.getLogger(__name__).info(
-        f"[Startup] Backfilled {fixed} daily tasks, dropped {dropped} orphaned tasks"
+        f"[Startup] Backfilled {fixed} daily tasks, marked {dropped} orphaned tasks"
     )
 
 
@@ -226,6 +237,11 @@ async def _heal_premature_skips(mongo_db):
 @api_router.get("/")
 async def root():
     return {"message": "Momentum Planner API"}
+
+@api_router.get("/health")
+async def health_check():
+    """Health check endpoint for deployment verification"""
+    return {"status": "healthy", "service": "momentum-planner-api"}
 
 # Schedule Slots endpoints
 @api_router.get("/schedule-slots", response_model=List[ScheduleSlot])
